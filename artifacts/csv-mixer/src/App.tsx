@@ -1,15 +1,14 @@
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef } from "react";
 
 type Row = string[];
 
 interface Table {
   id: string;
   name: string;
-  headers: Row;
   rows: Row[];
 }
 
-function parseCsv(text: string): { headers: Row; rows: Row[] } {
+function parseCsv(text: string): { rows: Row[] } {
   const out: Row[] = [];
   let cur: string[] = [];
   let field = "";
@@ -73,9 +72,7 @@ function parseCsv(text: string): { headers: Row; rows: Row[] } {
     pushRow();
   }
   const cleaned = out.filter((r) => r.some((v) => v && v.trim() !== ""));
-  if (cleaned.length === 0) return { headers: [], rows: [] };
-  const [headers, ...rows] = cleaned;
-  return { headers, rows };
+  return { rows: cleaned };
 }
 
 function pickRandomIndex(len: number): number {
@@ -103,11 +100,10 @@ function SettingsView({ tables, setTables }: { tables: Table[]; setTables: React
     const newTables: Table[] = [];
     for (const file of Array.from(files)) {
       const text = await file.text();
-      const { headers, rows } = parseCsv(text);
+      const { rows } = parseCsv(text);
       newTables.push({
         id: uid(),
         name: file.name.replace(/\.csv$/i, ""),
-        headers,
         rows,
       });
     }
@@ -129,7 +125,7 @@ function SettingsView({ tables, setTables }: { tables: Table[]; setTables: React
         <div>
           <h2 className="text-lg font-semibold">Таблицы</h2>
           <p className="text-sm text-muted-foreground">
-            Поддерживаются файлы .csv. Первая строка — заголовки.
+            Поддерживаются файлы .csv. Все строки считаются данными.
           </p>
         </div>
         <label className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium cursor-pointer hover:opacity-90 transition">
@@ -174,18 +170,10 @@ function SettingsView({ tables, setTables }: { tables: Table[]; setTables: React
               </div>
               <div className="overflow-x-auto max-h-64 overflow-y-auto">
                 <table className="text-xs w-full">
-                  <thead className="sticky top-0 bg-background">
-                    <tr className="text-left text-muted-foreground border-b border-border">
-                      <th className="px-2 py-1.5 font-medium w-10">№</th>
-                      {t.headers.map((h, i) => (
-                        <th key={i} className="px-2 py-1.5 font-medium">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
                   <tbody>
                     {t.rows.map((r, i) => (
                       <tr key={i} className="border-b border-border/50 last:border-0">
-                        <td className="px-2 py-1.5 text-muted-foreground font-mono">{i + 1}</td>
+                        <td className="px-2 py-1.5 text-muted-foreground font-mono w-10">{i + 1}</td>
                         {r.map((c, j) => (
                           <td key={j} className="px-2 py-1.5">{c}</td>
                         ))}
@@ -337,7 +325,5 @@ function Shell({ view, setView, tables, setTables }: AppProps) {
 export default function App() {
   const [view, setView] = useState<View>("settings");
   const [tables, setTables] = useState<Table[]>([]);
-  // suppress unused warning for useMemo import removal
-  useMemo(() => null, []);
   return <Shell view={view} setView={setView} tables={tables} setTables={setTables} />;
 }
