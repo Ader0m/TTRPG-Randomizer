@@ -484,10 +484,41 @@ function RandomizeView({
   );
 }
 
+const STORAGE_KEY = "csv-mixer:state:v1";
+
+function loadState(): { entities: Entity[]; selectedEntityId: string | null } {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { entities: [], selectedEntityId: null };
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.entities)) {
+      return { entities: [], selectedEntityId: null };
+    }
+    return {
+      entities: parsed.entities as Entity[],
+      selectedEntityId: parsed.selectedEntityId ?? null,
+    };
+  } catch {
+    return { entities: [], selectedEntityId: null };
+  }
+}
+
 export default function App() {
   const [view, setView] = useState<View>("settings");
-  const [entities, setEntities] = useState<Entity[]>([]);
-  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const initial = useState(() => loadState())[0];
+  const [entities, setEntities] = useState<Entity[]>(initial.entities);
+  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(initial.selectedEntityId);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ entities, selectedEntityId }),
+      );
+    } catch {
+      // ignore quota / serialization errors
+    }
+  }, [entities, selectedEntityId]);
 
   // listen for create-entity events fired from RandomizeView's "Новая" button
   useEffect(() => {
