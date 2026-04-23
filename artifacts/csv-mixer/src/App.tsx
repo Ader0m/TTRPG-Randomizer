@@ -95,6 +95,7 @@ type GenItem = { tableId: string; tableName: string; idx: number; row: Row };
 
 interface SavedGeneration {
   id: string;
+  name?: string;
   sourceEntityId: string;
   sourceEntityName: string;
   createdAt: number;
@@ -341,7 +342,7 @@ function RandomizeView({
   entities: Entity[];
   selectedEntityId: string | null;
   setSelectedEntityId: (id: string | null) => void;
-  onSave: (sourceEntityId: string, sourceEntityName: string, items: GenItem[]) => void;
+  onSave: (sourceEntityId: string, sourceEntityName: string, items: GenItem[], name: string) => void;
 }) {
   const [items, setItems] = useState<GenItem[]>([]);
   const [justSaved, setJustSaved] = useState(false);
@@ -367,7 +368,12 @@ function RandomizeView({
 
   const save = () => {
     if (!entity || items.length === 0) return;
-    onSave(entity.id, entity.name, items);
+    const name = prompt(
+      "Название сохранённой сущности (можно оставить пустым):",
+      "",
+    );
+    if (name === null) return; // user cancelled
+    onSave(entity.id, entity.name, items, name.trim());
     setJustSaved(true);
     setTimeout(() => setJustSaved(false), 1500);
   };
@@ -420,7 +426,7 @@ function RandomizeView({
       <section className="bg-card rounded-xl border border-border p-6 shadow-sm">
         <div className="flex items-center justify-between gap-4 flex-wrap mb-4">
           <div>
-            <h2 className="text-lg font-semibold">Окно рандомизации</h2>
+            <h2 className="text-lg font-semibold">Генерация</h2>
             <p className="text-sm text-muted-foreground">
               {entity
                 ? `Из каждой таблицы сущности «${entity.name}» будет взята случайная строка.`
@@ -566,17 +572,41 @@ function SavedView({
       <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm overflow-y-auto">
         <div className="max-w-5xl mx-auto px-6 py-10">
           <div className="flex items-start justify-between gap-4 mb-6">
-            <div>
+            <div className="min-w-0 flex-1">
               <div className="text-xs text-muted-foreground mb-1">
                 Сущность: <span className="font-medium text-foreground">{opened.sourceEntityName}</span>
                 <span className="mx-2">•</span>
                 {formatDate(opened.createdAt)}
               </div>
-              <h2 className="text-2xl font-bold tracking-tight">Сохранённая сущность</h2>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-2xl font-bold tracking-tight break-words">
+                  {opened.name || "Без названия"}
+                </h2>
+                <button
+                  onClick={() => {
+                    const next = prompt(
+                      "Новое название (можно оставить пустым):",
+                      opened.name ?? "",
+                    );
+                    if (next === null) return;
+                    const trimmed = next.trim();
+                    setSaved((prev) =>
+                      prev.map((s) =>
+                        s.id === opened.id ? { ...s, name: trimmed || undefined } : s,
+                      ),
+                    );
+                  }}
+                  className="p-1.5 rounded-md text-muted-foreground hover:text-accent hover:bg-accent/10 transition"
+                  title="Переименовать"
+                  aria-label="Переименовать"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" /></svg>
+                </button>
+              </div>
             </div>
             <button
               onClick={() => setOpenId(null)}
-              className="p-2 rounded-lg border border-border hover:bg-muted transition"
+              className="p-2 rounded-lg border border-border hover:bg-muted transition shrink-0"
               aria-label="Закрыть"
               title="Закрыть"
             >
@@ -625,9 +655,9 @@ function SavedView({
     <section className="bg-card rounded-xl border border-border p-6 shadow-sm">
       <div className="flex items-center justify-between gap-4 flex-wrap mb-4">
         <div>
-          <h2 className="text-lg font-semibold">Сгенерированные сущности</h2>
+          <h2 className="text-lg font-semibold">Сохранённое</h2>
           <p className="text-sm text-muted-foreground">
-            Здесь хранятся результаты, которые вы сохранили из окна рандомизации.
+            Здесь хранятся результаты, которые вы сохранили из вкладки «Генерация».
           </p>
         </div>
         <label className="inline-flex items-center gap-2 text-sm">
@@ -648,7 +678,7 @@ function SavedView({
       {visible.length === 0 ? (
         <div className="border-2 border-dashed border-border rounded-lg p-10 text-center text-muted-foreground text-sm">
           {saved.length === 0
-            ? "Пока ничего не сохранено. Сгенерируйте результат и нажмите «Сохранить» в окне рандомизации."
+            ? "Пока ничего не сохранено. Сгенерируйте результат и нажмите «Сохранить» во вкладке «Генерация»."
             : "По выбранному фильтру ничего не найдено."}
         </div>
       ) : (
@@ -665,14 +695,17 @@ function SavedView({
                   className="group w-full text-left p-4 rounded-lg border border-border bg-background hover:border-accent/60 hover:bg-accent/5 transition"
                 >
                   <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <span className="text-xs font-medium px-2 py-0.5 rounded-md bg-accent/10 text-accent">
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-md bg-accent/10 text-accent truncate max-w-[60%]">
                       {s.sourceEntityName}
                     </span>
-                    <span className="text-xs text-muted-foreground">
+                    <span className="text-xs text-muted-foreground shrink-0">
                       {formatDate(s.createdAt)}
                     </span>
                   </div>
-                  <div className="text-sm text-foreground/80 line-clamp-2">
+                  <div className={`text-sm font-semibold mb-1 break-words ${s.name ? "text-foreground" : "text-muted-foreground italic"}`}>
+                    {s.name || "Без названия"}
+                  </div>
+                  <div className="text-sm text-foreground/70 line-clamp-2">
                     {preview || "(пусто)"}
                     {s.items.length > 2 && (
                       <span className="text-muted-foreground"> … +{s.items.length - 2}</span>
@@ -749,9 +782,14 @@ export default function App() {
     }
   }, [saved]);
 
-  const handleSaveGeneration = (sourceEntityId: string, sourceEntityName: string, items: GenItem[]) => {
+  const handleSaveGeneration = (
+    sourceEntityId: string,
+    sourceEntityName: string,
+    items: GenItem[],
+    name: string,
+  ) => {
     setSaved((prev) => [
-      { id: uid(), sourceEntityId, sourceEntityName, createdAt: Date.now(), items },
+      { id: uid(), name: name || undefined, sourceEntityId, sourceEntityName, createdAt: Date.now(), items },
       ...prev,
     ]);
   };
@@ -783,7 +821,7 @@ export default function App() {
           </h1>
           <p className="mt-3 text-muted-foreground max-w-2xl">
             Создайте сущность генерации, загрузите в неё таблицы, а потом в
-            окне рандомизации получайте случайные строки.
+            вкладке «Генерация» получайте случайные строки.
           </p>
         </header>
 
@@ -806,7 +844,7 @@ export default function App() {
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            Окно рандомизации
+            Генерация
           </button>
           <button
             onClick={() => setView("saved")}
@@ -816,7 +854,7 @@ export default function App() {
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            Сгенерированные сущности
+            Сохранённое
             {saved.length > 0 && (
               <span className="text-xs px-1.5 py-0.5 rounded-md bg-accent/15 text-accent">
                 {saved.length}
