@@ -331,26 +331,45 @@ function RandomizeView({
   selectedEntityId: string | null;
   setSelectedEntityId: (id: string | null) => void;
 }) {
-  const [output, setOutput] = useState("");
+  type Item = { tableId: string; tableName: string; idx: number; row: Row };
+  const [items, setItems] = useState<Item[]>([]);
   const entity = entities.find((e) => e.id === selectedEntityId) ?? null;
   const tables = entity?.tables ?? [];
 
   const canGenerate = tables.length > 0 && tables.some((t) => t.rows.length > 0);
 
+  const formatItem = (it: Item) =>
+    `"${it.tableName}" "№ ${it.idx + 1}" "${it.row.join(" | ")}"`;
+
   const generate = () => {
     if (!entity) return;
-    const lines: string[] = [];
+    const next: Item[] = [];
     for (const t of entity.tables) {
       if (t.rows.length === 0) continue;
       const idx = pickRandomIndex(t.rows.length);
-      const row = t.rows[idx];
-      lines.push(`"${t.name}" "№ ${idx + 1}" "${row.join(" | ")}"`);
+      next.push({ tableId: t.id, tableName: t.name, idx, row: t.rows[idx] });
     }
-    setOutput(lines.join("\n────────────────────\n"));
+    setItems(next);
+  };
+
+  const regenerateOne = (tableId: string) => {
+    if (!entity) return;
+    const t = entity.tables.find((x) => x.id === tableId);
+    if (!t || t.rows.length === 0) return;
+    const idx = pickRandomIndex(t.rows.length);
+    setItems((prev) =>
+      prev.map((it) =>
+        it.tableId === tableId
+          ? { tableId: t.id, tableName: t.name, idx, row: t.rows[idx] }
+          : it,
+      ),
+    );
   };
 
   const copy = () => {
-    if (output) navigator.clipboard?.writeText(output);
+    if (items.length === 0) return;
+    const text = items.map(formatItem).join("\n────────────────────\n");
+    navigator.clipboard?.writeText(text);
   };
 
   return (
@@ -389,7 +408,7 @@ function RandomizeView({
             </p>
           </div>
           <div className="flex gap-2">
-            {output && (
+            {items.length > 0 && (
               <button
                 onClick={copy}
                 className="px-3 py-2 rounded-lg border border-border text-sm hover:bg-muted transition"
@@ -416,13 +435,39 @@ function RandomizeView({
           </div>
         )}
 
-        <textarea
-          value={output}
-          onChange={(e) => setOutput(e.target.value)}
-          readOnly={!canGenerate}
-          placeholder={'Здесь появится результат, например:\n"Имена" "№ 3" "Анна"\n"Глаголы" "№ 7" "бежит"'}
-          className="w-full min-h-[280px] font-mono text-sm p-4 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-y"
-        />
+        {items.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border p-10 text-center text-sm text-muted-foreground font-mono whitespace-pre-line">
+            {'Здесь появится результат, например:\n"Имена" "№ 3" "Анна"\n────────────────────\n"Глаголы" "№ 7" "бежит"'}
+          </div>
+        ) : (
+          <ul className="rounded-lg border border-input bg-background p-2">
+            {items.map((it, idx) => (
+              <li key={it.tableId}>
+                <div className="flex items-start gap-2 group">
+                  <button
+                    onClick={() => regenerateOne(it.tableId)}
+                    title={`Перегенерировать строку из «${it.tableName}»`}
+                    className="shrink-0 mt-1.5 p-1.5 rounded-md text-muted-foreground hover:text-accent hover:bg-accent/10 transition"
+                    aria-label="Перегенерировать"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                      <path d="M21 3v5h-5" />
+                      <path d="M3 21v-5h5" />
+                    </svg>
+                  </button>
+                  <div className="flex-1 px-2 py-2 font-mono text-sm break-words">
+                    {formatItem(it)}
+                  </div>
+                </div>
+                {idx < items.length - 1 && (
+                  <div className="ml-10 my-1 border-t border-border" />
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
 
         {tables.length > 0 && (
           <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
