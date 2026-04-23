@@ -319,15 +319,147 @@ function SettingsView({
     }));
   };
 
+  const importRef = useRef<HTMLInputElement>(null);
+
+  const exportEntities = () => {
+    if (entities.length === 0) {
+      alert("Пока нечего выгружать.");
+      return;
+    }
+    const payload = {
+      type: "csv-mixer:entities",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      entities,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    a.href = url;
+    a.download = `csv-mixer-entities-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
+  const importEntities = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const arr: unknown = Array.isArray(data) ? data : data?.entities;
+      if (!Array.isArray(arr)) {
+        alert("Файл не похож на выгрузку «Настроек».");
+        return;
+      }
+      const incoming: Entity[] = [];
+      for (const raw of arr) {
+        if (!raw || typeof raw !== "object") continue;
+        const r = raw as Record<string, unknown>;
+        if (typeof r.name !== "string" || !Array.isArray(r.tables)) continue;
+        const tables: Table[] = [];
+        for (const tRaw of r.tables) {
+          if (!tRaw || typeof tRaw !== "object") continue;
+          const tr = tRaw as Record<string, unknown>;
+          if (typeof tr.name !== "string" || !Array.isArray(tr.rows)) continue;
+          const rows: Row[] = [];
+          for (const rowRaw of tr.rows) {
+            if (Array.isArray(rowRaw) && rowRaw.every((c) => typeof c === "string")) {
+              rows.push(rowRaw as string[]);
+            }
+          }
+          tables.push({ id: uid(), name: tr.name, rows });
+        }
+        incoming.push({ id: uid(), name: r.name, tables });
+      }
+      if (incoming.length === 0) {
+        alert("В файле не найдено подходящих сущностей.");
+        return;
+      }
+      let added = 0;
+      setEntities((prev) => {
+        const usedEntityNames = new Set(prev.map((e) => e.name.trim().toLowerCase()));
+        const uniqueEntityName = (base: string) => {
+          const b = base.trim();
+          if (!b) return "Без названия";
+          if (!usedEntityNames.has(b.toLowerCase())) return b;
+          let i = 1;
+          while (usedEntityNames.has(`${b} (${i})`.toLowerCase())) i++;
+          return `${b} (${i})`;
+        };
+        const merged = [...prev];
+        for (const ent of incoming) {
+          // dedupe entity name across existing entities
+          const finalEntityName = uniqueEntityName(ent.name);
+          usedEntityNames.add(finalEntityName.toLowerCase());
+
+          // dedupe table names inside the imported entity itself (defensive)
+          const usedTableNames = new Set<string>();
+          const dedupTables = ent.tables.map((t) => {
+            const base = (t.name ?? "").trim() || "Таблица";
+            let candidate = base;
+            if (usedTableNames.has(candidate.toLowerCase())) {
+              let i = 1;
+              while (usedTableNames.has(`${base} (${i})`.toLowerCase())) i++;
+              candidate = `${base} (${i})`;
+            }
+            usedTableNames.add(candidate.toLowerCase());
+            return { ...t, name: candidate };
+          });
+
+          merged.push({ ...ent, name: finalEntityName, tables: dedupTables });
+          added++;
+        }
+        return merged;
+      });
+      alert(`Загружено сущностей: ${added}`);
+    } catch {
+      alert("Не удалось прочитать файл. Убедитесь, что это корректный JSON.");
+    } finally {
+      if (importRef.current) importRef.current.value = "";
+    }
+  };
+
   return (
     <div className="space-y-6">
       <section className="bg-card rounded-xl border border-border p-6 shadow-sm">
-        <div className="mb-4">
-          <h2 className="text-lg font-semibold">Сущность генерации</h2>
-          <p className="text-sm text-muted-foreground">
-            Группа таблиц, из которых будет идти случайный выбор. Создайте
-            сущность, дайте ей название и загрузите в неё CSV таблицы.
-          </p>
+        <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
+          <div>
+            <h2 className="text-lg font-semibold">Сущность генерации</h2>
+            <p className="text-sm text-muted-foreground">
+              Группа таблиц, из которых будет идти случайный выбор. Создайте
+              сущность, дайте ей название и загрузите в неё CSV таблицы.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={exportEntities}
+              className="px-3 py-2 rounded-lg border border-border text-sm hover:bg-muted transition inline-flex items-center gap-1.5"
+              title="Скачать все сущности с таблицами в JSON"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+              Выгрузить
+            </button>
+            <label
+              className="px-3 py-2 rounded-lg border border-border text-sm hover:bg-muted transition inline-flex items-center gap-1.5 cursor-pointer"
+              title="Загрузить ранее выгруженный JSON"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+              Загрузить
+              <input
+                ref={importRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={(e) => importEntities(e.target.files)}
+              />
+            </label>
+          </div>
         </div>
         <EntityPicker
           entities={entities}
