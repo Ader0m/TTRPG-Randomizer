@@ -614,6 +614,96 @@ function SavedView({
 }) {
   const [filter, setFilter] = useState<string>("all");
   const [openId, setOpenId] = useState<string | null>(null);
+  const importRef = useRef<HTMLInputElement>(null);
+
+  const exportSaved = () => {
+    if (saved.length === 0) {
+      alert("Пока нечего выгружать.");
+      return;
+    }
+    const payload = {
+      type: "csv-mixer:saved",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      items: saved,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    a.href = url;
+    a.download = `csv-mixer-saved-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
+  const importSaved = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const arr: unknown = Array.isArray(data) ? data : data?.items;
+      if (!Array.isArray(arr)) {
+        alert("Файл не похож на выгрузку «Сохранённого».");
+        return;
+      }
+      const incoming: SavedGeneration[] = [];
+      for (const raw of arr) {
+        if (!raw || typeof raw !== "object") continue;
+        const r = raw as Record<string, unknown>;
+        const items = Array.isArray(r.items) ? (r.items as GenItem[]) : null;
+        if (
+          typeof r.sourceEntityId !== "string" ||
+          typeof r.sourceEntityName !== "string" ||
+          typeof r.createdAt !== "number" ||
+          !items
+        ) {
+          continue;
+        }
+        incoming.push({
+          id: typeof r.id === "string" ? r.id : uid(),
+          name: typeof r.name === "string" && r.name ? r.name : undefined,
+          sourceEntityId: r.sourceEntityId,
+          sourceEntityName: r.sourceEntityName,
+          createdAt: r.createdAt,
+          items,
+        });
+      }
+      if (incoming.length === 0) {
+        alert("В файле не найдено подходящих записей.");
+        return;
+      }
+      let added = 0;
+      let skipped = 0;
+      setSaved((prev) => {
+        const existingIds = new Set(prev.map((s) => s.id));
+        const merged = [...prev];
+        for (const it of incoming) {
+          let item = it;
+          if (existingIds.has(item.id)) {
+            // assign a fresh id to avoid collision instead of skipping
+            item = { ...item, id: uid() };
+          }
+          merged.push(item);
+          existingIds.add(item.id);
+          added++;
+        }
+        merged.sort((a, b) => b.createdAt - a.createdAt);
+        return merged;
+      });
+      const msg = `Загружено записей: ${added}` + (skipped ? `, пропущено: ${skipped}` : "");
+      alert(msg);
+    } catch {
+      alert("Не удалось прочитать файл. Убедитесь, что это корректный JSON.");
+    } finally {
+      if (importRef.current) importRef.current.value = "";
+    }
+  };
 
   const formatItem = (it: GenItem) =>
     `"${it.tableName}" "№ ${it.idx + 1}" "${it.row.join(" | ")}"`;
@@ -744,19 +834,43 @@ function SavedView({
             Здесь хранятся результаты, которые вы сохранили из вкладки «Генерация».
           </p>
         </div>
-        <label className="inline-flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">Фильтр:</span>
-          <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring min-w-[180px]"
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className="inline-flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Фильтр:</span>
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring min-w-[180px]"
+            >
+              <option value="all">Все</option>
+              {sourceOptions.map((o) => (
+                <option key={o.id} value={o.id}>{o.name}</option>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={exportSaved}
+            className="px-3 py-2 rounded-lg border border-border text-sm hover:bg-muted transition inline-flex items-center gap-1.5"
+            title="Скачать всё «Сохранённое» в JSON"
           >
-            <option value="all">Все</option>
-            {sourceOptions.map((o) => (
-              <option key={o.id} value={o.id}>{o.name}</option>
-            ))}
-          </select>
-        </label>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+            Выгрузить
+          </button>
+          <label
+            className="px-3 py-2 rounded-lg border border-border text-sm hover:bg-muted transition inline-flex items-center gap-1.5 cursor-pointer"
+            title="Загрузить ранее выгруженный JSON"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+            Загрузить
+            <input
+              ref={importRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(e) => importSaved(e.target.files)}
+            />
+          </label>
+        </div>
       </div>
 
       {visible.length === 0 ? (
