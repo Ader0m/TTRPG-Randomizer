@@ -172,18 +172,20 @@ function SettingsView({ tables, setTables }: { tables: Table[]; setTables: React
                   Удалить
                 </button>
               </div>
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto max-h-64 overflow-y-auto">
                 <table className="text-xs w-full">
-                  <thead>
+                  <thead className="sticky top-0 bg-background">
                     <tr className="text-left text-muted-foreground border-b border-border">
+                      <th className="px-2 py-1.5 font-medium w-10">№</th>
                       {t.headers.map((h, i) => (
                         <th key={i} className="px-2 py-1.5 font-medium">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {t.rows.slice(0, 3).map((r, i) => (
+                    {t.rows.map((r, i) => (
                       <tr key={i} className="border-b border-border/50 last:border-0">
+                        <td className="px-2 py-1.5 text-muted-foreground font-mono">{i + 1}</td>
                         {r.map((c, j) => (
                           <td key={j} className="px-2 py-1.5">{c}</td>
                         ))}
@@ -191,11 +193,6 @@ function SettingsView({ tables, setTables }: { tables: Table[]; setTables: React
                     ))}
                   </tbody>
                 </table>
-                {t.rows.length > 3 && (
-                  <div className="text-xs text-muted-foreground mt-1 px-2">
-                    … и ещё {t.rows.length - 3}
-                  </div>
-                )}
               </div>
             </div>
           ))}
