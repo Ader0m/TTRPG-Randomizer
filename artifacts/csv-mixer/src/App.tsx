@@ -165,6 +165,47 @@ function EntityPicker({
   );
 }
 
+function TableNameInput({
+  value,
+  onCommit,
+}: {
+  value: string;
+  onCommit: (name: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      alert("Название не может быть пустым.");
+      setDraft(value);
+      return;
+    }
+    if (trimmed === value) return;
+    onCommit(trimmed);
+    // If commit was rejected (duplicate), parent value stays the same and our useEffect will revert draft.
+  };
+
+  return (
+    <input
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        if (e.key === "Escape") {
+          setDraft(value);
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      className="font-medium text-sm bg-transparent border-b border-transparent hover:border-border focus:border-ring focus:outline-none px-1 py-0.5 flex-1"
+    />
+  );
+}
+
 function SettingsView({
   entities,
   setEntities,
@@ -183,11 +224,42 @@ function SettingsView({
     setEntities((prev) => prev.map((e) => (e.id === id ? fn(e) : e)));
   };
 
+  const isEntityNameTaken = (name: string, exceptId?: string) => {
+    const n = name.trim().toLowerCase();
+    return entities.some((e) => e.id !== exceptId && e.name.trim().toLowerCase() === n);
+  };
+
+  const isTableNameTaken = (entityId: string, name: string, exceptId?: string) => {
+    const ent = entities.find((e) => e.id === entityId);
+    if (!ent) return false;
+    const n = name.trim().toLowerCase();
+    return ent.tables.some((t) => t.id !== exceptId && t.name.trim().toLowerCase() === n);
+  };
+
+  const uniqueTableName = (entityId: string, base: string, taken: Set<string>) => {
+    const lower = (s: string) => s.trim().toLowerCase();
+    const ent = entities.find((e) => e.id === entityId);
+    const existing = new Set<string>([
+      ...(ent?.tables.map((t) => lower(t.name)) ?? []),
+      ...Array.from(taken).map(lower),
+    ]);
+    if (!existing.has(lower(base))) return base;
+    let i = 2;
+    while (existing.has(lower(`${base} (${i})`))) i++;
+    return `${base} (${i})`;
+  };
+
   const createEntity = () => {
-    const name = prompt("Название сущности генерации:");
-    if (!name || !name.trim()) return;
+    const raw = prompt("Название сущности генерации:");
+    if (raw === null) return;
+    const name = raw.trim();
+    if (!name) return;
+    if (isEntityNameTaken(name)) {
+      alert(`Сущность с названием «${name}» уже существует.`);
+      return;
+    }
     const id = uid();
-    setEntities((prev) => [...prev, { id, name: name.trim(), tables: [] }]);
+    setEntities((prev) => [...prev, { id, name, tables: [] }]);
     setSelectedEntityId(id);
   };
 
@@ -202,20 +274,29 @@ function SettingsView({
   };
 
   const renameEntity = (id: string, name: string) => {
-    updateEntity(id, (e) => ({ ...e, name }));
+    const trimmed = name.trim();
+    if (!trimmed) {
+      alert("Название не может быть пустым.");
+      return;
+    }
+    if (isEntityNameTaken(trimmed, id)) {
+      alert(`Сущность с названием «${trimmed}» уже существует.`);
+      return;
+    }
+    updateEntity(id, (e) => ({ ...e, name: trimmed }));
   };
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || !entity) return;
     const newTables: Table[] = [];
+    const usedNames = new Set<string>();
     for (const file of Array.from(files)) {
       const text = await file.text();
       const { rows } = parseCsv(text);
-      newTables.push({
-        id: uid(),
-        name: file.name.replace(/\.csv$/i, ""),
-        rows,
-      });
+      const base = file.name.replace(/\.csv$/i, "");
+      const finalName = uniqueTableName(entity.id, base, usedNames);
+      usedNames.add(finalName);
+      newTables.push({ id: uid(), name: finalName, rows });
     }
     updateEntity(entity.id, (e) => ({ ...e, tables: [...e.tables, ...newTables] }));
     if (fileRef.current) fileRef.current.value = "";
@@ -228,6 +309,10 @@ function SettingsView({
 
   const renameTable = (tableId: string, name: string) => {
     if (!entity) return;
+    if (isTableNameTaken(entity.id, name, tableId)) {
+      alert(`Таблица с названием «${name.trim()}» уже есть в этой сущности.`);
+      return;
+    }
     updateEntity(entity.id, (e) => ({
       ...e,
       tables: e.tables.map((t) => (t.id === tableId ? { ...t, name } : t)),
@@ -289,10 +374,9 @@ function SettingsView({
                 <div key={t.id} className="border border-border rounded-lg p-4 bg-background">
                   <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
                     <div className="flex items-center gap-2 flex-1 min-w-[200px]">
-                      <input
+                      <TableNameInput
                         value={t.name}
-                        onChange={(e) => renameTable(t.id, e.target.value)}
-                        className="font-medium text-sm bg-transparent border-b border-transparent hover:border-border focus:border-ring focus:outline-none px-1 py-0.5 flex-1"
+                        onCommit={(name) => renameTable(t.id, name)}
                       />
                       <span className="text-xs px-2 py-0.5 rounded-md bg-muted text-muted-foreground">
                         {t.rows.length} {t.rows.length === 1 ? "строка" : "строк"}
@@ -798,15 +882,41 @@ export default function App() {
   useEffect(() => {
     const handler = (e: Event) => {
       const ce = e as CustomEvent<string>;
-      const name = ce.detail;
+      const name = ce.detail?.trim();
       if (!name) return;
-      const id = uid();
-      setEntities((prev) => [...prev, { id, name, tables: [] }]);
-      setSelectedEntityId(id);
+      const lower = name.toLowerCase();
+      let created = false;
+      setEntities((prev) => {
+        if (prev.some((x) => x.name.trim().toLowerCase() === lower)) {
+          alert(`Сущность с названием «${name}» уже существует.`);
+          return prev;
+        }
+        const id = uid();
+        created = true;
+        setSelectedEntityId(id);
+        return [...prev, { id, name, tables: [] }];
+      });
+      void created;
     };
     window.addEventListener("create-entity", handler);
     return () => window.removeEventListener("create-entity", handler);
   }, []);
+
+  // Keep saved generations' "Сущность" label in sync when an entity is renamed
+  useEffect(() => {
+    setSaved((prev) => {
+      let changed = false;
+      const next = prev.map((s) => {
+        const ent = entities.find((e) => e.id === s.sourceEntityId);
+        if (ent && ent.name !== s.sourceEntityName) {
+          changed = true;
+          return { ...s, sourceEntityName: ent.name };
+        }
+        return s;
+      });
+      return changed ? next : prev;
+    });
+  }, [entities]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
