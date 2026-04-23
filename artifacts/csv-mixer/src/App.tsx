@@ -346,7 +346,7 @@ function RandomizeView({
       const row = t.rows[idx];
       lines.push(`"${t.name}" "№ ${idx + 1}" "${row.join(" | ")}"`);
     }
-    setOutput(lines.join("\n"));
+    setOutput(lines.join("\n────────────────────\n"));
   };
 
   const copy = () => {
