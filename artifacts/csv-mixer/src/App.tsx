@@ -679,15 +679,31 @@ function SavedView({
         return;
       }
       let added = 0;
-      let skipped = 0;
       setSaved((prev) => {
         const existingIds = new Set(prev.map((s) => s.id));
+        const usedNames = new Set(
+          prev
+            .map((s) => (s.name ?? "").trim().toLowerCase())
+            .filter((n) => n.length > 0),
+        );
+        const uniqueName = (base: string) => {
+          const b = base.trim();
+          if (!b) return b;
+          if (!usedNames.has(b.toLowerCase())) return b;
+          let i = 1;
+          while (usedNames.has(`${b} (${i})`.toLowerCase())) i++;
+          return `${b} (${i})`;
+        };
         const merged = [...prev];
         for (const it of incoming) {
           let item = it;
           if (existingIds.has(item.id)) {
-            // assign a fresh id to avoid collision instead of skipping
             item = { ...item, id: uid() };
+          }
+          if (item.name && item.name.trim()) {
+            const finalName = uniqueName(item.name);
+            if (finalName !== item.name) item = { ...item, name: finalName };
+            usedNames.add(finalName.toLowerCase());
           }
           merged.push(item);
           existingIds.add(item.id);
@@ -696,8 +712,7 @@ function SavedView({
         merged.sort((a, b) => b.createdAt - a.createdAt);
         return merged;
       });
-      const msg = `Загружено записей: ${added}` + (skipped ? `, пропущено: ${skipped}` : "");
-      alert(msg);
+      alert(`Загружено записей: ${added}`);
     } catch {
       alert("Не удалось прочитать файл. Убедитесь, что это корректный JSON.");
     } finally {
