@@ -109,6 +109,7 @@ function EntityPicker({
   onCreate,
   onDelete,
   onRename,
+  unsavedIds,
 }: {
   entities: Entity[];
   selectedId: string | null;
@@ -116,22 +117,38 @@ function EntityPicker({
   onCreate: () => void;
   onDelete?: (id: string) => void;
   onRename?: (id: string, name: string) => void;
+  unsavedIds?: Set<string>;
 }) {
   const selected = entities.find((e) => e.id === selectedId) ?? null;
+  const selectedUnsaved = !!(selected && unsavedIds?.has(selected.id));
   return (
     <div className="flex items-center gap-2 flex-wrap">
-      <select
-        value={selectedId ?? ""}
-        onChange={(e) => onSelect(e.target.value)}
-        className="px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring min-w-[200px]"
-      >
-        {entities.length === 0 && <option value="">— нет сущностей —</option>}
-        {entities.map((e) => (
-          <option key={e.id} value={e.id}>
-            {e.name} ({e.tables.length})
-          </option>
-        ))}
-      </select>
+      <div className="relative">
+        <select
+          value={selectedId ?? ""}
+          onChange={(e) => onSelect(e.target.value)}
+          className={`px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring min-w-[200px] ${
+            selectedUnsaved ? "pr-9" : ""
+          }`}
+        >
+          {entities.length === 0 && <option value="">— нет сущностей —</option>}
+          {entities.map((e) => {
+            const dot = unsavedIds?.has(e.id) ? "● " : "";
+            return (
+              <option key={e.id} value={e.id}>
+                {dot}{e.name} ({e.tables.length})
+              </option>
+            );
+          })}
+        </select>
+        {selectedUnsaved && (
+          <span
+            className="pointer-events-none absolute right-7 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-background"
+            title="Есть несохранённая генерация"
+            aria-label="Есть несохранённая генерация"
+          />
+        )}
+      </div>
       <button
         onClick={onCreate}
         className="px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition inline-flex items-center gap-1.5"
@@ -211,11 +228,13 @@ function SettingsView({
   setEntities,
   selectedEntityId,
   setSelectedEntityId,
+  unsavedIds,
 }: {
   entities: Entity[];
   setEntities: React.Dispatch<React.SetStateAction<Entity[]>>;
   selectedEntityId: string | null;
   setSelectedEntityId: (id: string | null) => void;
+  unsavedIds: Set<string>;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const entity = entities.find((e) => e.id === selectedEntityId) ?? null;
@@ -305,6 +324,23 @@ function SettingsView({
   const removeTable = (tableId: string) => {
     if (!entity) return;
     updateEntity(entity.id, (e) => ({ ...e, tables: e.tables.filter((t) => t.id !== tableId) }));
+  };
+
+  const moveTable = (tableId: string, where: "top" | "up" | "down" | "bottom") => {
+    if (!entity) return;
+    updateEntity(entity.id, (e) => {
+      const idx = e.tables.findIndex((t) => t.id === tableId);
+      if (idx === -1) return e;
+      const next = [...e.tables];
+      const [item] = next.splice(idx, 1);
+      let target = idx;
+      if (where === "top") target = 0;
+      else if (where === "bottom") target = next.length;
+      else if (where === "up") target = Math.max(0, idx - 1);
+      else if (where === "down") target = Math.min(next.length, idx + 1);
+      next.splice(target, 0, item);
+      return { ...e, tables: next };
+    });
   };
 
   const renameTable = (tableId: string, name: string) => {
@@ -468,6 +504,7 @@ function SettingsView({
           onCreate={createEntity}
           onDelete={deleteEntity}
           onRename={renameEntity}
+          unsavedIds={unsavedIds}
         />
       </section>
 
@@ -502,8 +539,47 @@ function SettingsView({
             </div>
           ) : (
             <div className="space-y-3">
-              {entity.tables.map((t) => (
-                <div key={t.id} className="border border-border rounded-lg p-4 bg-background">
+              {entity.tables.map((t, tIdx) => (
+                <div key={t.id} className="flex items-stretch gap-2">
+                  <div className="flex flex-col gap-1 shrink-0">
+                    <button
+                      onClick={() => moveTable(t.id, "top")}
+                      disabled={tIdx === 0}
+                      title="В начало"
+                      aria-label="В начало"
+                      className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-accent hover:bg-accent/10 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 11 12 6 7 11" /><polyline points="17 18 12 13 7 18" /></svg>
+                    </button>
+                    <button
+                      onClick={() => moveTable(t.id, "up")}
+                      disabled={tIdx === 0}
+                      title="Выше"
+                      aria-label="Выше"
+                      className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-accent hover:bg-accent/10 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15" /></svg>
+                    </button>
+                    <button
+                      onClick={() => moveTable(t.id, "down")}
+                      disabled={tIdx === entity.tables.length - 1}
+                      title="Ниже"
+                      aria-label="Ниже"
+                      className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-accent hover:bg-accent/10 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+                    </button>
+                    <button
+                      onClick={() => moveTable(t.id, "bottom")}
+                      disabled={tIdx === entity.tables.length - 1}
+                      title="В конец"
+                      aria-label="В конец"
+                      className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-accent hover:bg-accent/10 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="7 13 12 18 17 13" /><polyline points="7 6 12 11 17 6" /></svg>
+                    </button>
+                  </div>
+                  <div className="flex-1 border border-border rounded-lg p-4 bg-background">
                   <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
                     <div className="flex items-center gap-2 flex-1 min-w-[200px]">
                       <TableNameInput
@@ -535,6 +611,7 @@ function SettingsView({
                       </tbody>
                     </table>
                   </div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -553,14 +630,19 @@ function RandomizeView({
   entities,
   selectedEntityId,
   setSelectedEntityId,
+  items,
+  setItems,
   onSave,
+  unsavedIds,
 }: {
   entities: Entity[];
   selectedEntityId: string | null;
   setSelectedEntityId: (id: string | null) => void;
+  items: GenItem[];
+  setItems: (entityId: string, items: GenItem[], saved: boolean) => void;
   onSave: (sourceEntityId: string, sourceEntityName: string, items: GenItem[], name: string) => void;
+  unsavedIds: Set<string>;
 }) {
-  const [items, setItems] = useState<GenItem[]>([]);
   const [justSaved, setJustSaved] = useState(false);
   const entity = entities.find((e) => e.id === selectedEntityId) ?? null;
   const tables = entity?.tables ?? [];
@@ -568,7 +650,7 @@ function RandomizeView({
   const canGenerate = tables.length > 0 && tables.some((t) => t.rows.length > 0);
 
   const formatItem = (it: GenItem) =>
-    `"${it.tableName}" "№ ${it.idx + 1}" "${it.row.join(" | ")}"`;
+    `${it.tableName}:\n${it.row.join(" | ")}`;
 
   const generate = () => {
     if (!entity) return;
@@ -578,7 +660,7 @@ function RandomizeView({
       const idx = pickRandomIndex(t.rows.length);
       next.push({ tableId: t.id, tableName: t.name, idx, row: t.rows[idx] });
     }
-    setItems(next);
+    setItems(entity.id, next, false);
     setJustSaved(false);
   };
 
@@ -599,13 +681,12 @@ function RandomizeView({
     const t = entity.tables.find((x) => x.id === tableId);
     if (!t || t.rows.length === 0) return;
     const idx = pickRandomIndex(t.rows.length);
-    setItems((prev) =>
-      prev.map((it) =>
-        it.tableId === tableId
-          ? { tableId: t.id, tableName: t.name, idx, row: t.rows[idx] }
-          : it,
-      ),
+    const next = items.map((it) =>
+      it.tableId === tableId
+        ? { tableId: t.id, tableName: t.name, idx, row: t.rows[idx] }
+        : it,
     );
+    setItems(entity.id, next, false);
   };
 
   const copy = () => {
@@ -636,6 +717,7 @@ function RandomizeView({
             const ev = new CustomEvent("create-entity", { detail: name.trim() });
             window.dispatchEvent(ev);
           }}
+          unsavedIds={unsavedIds}
         />
       </section>
 
@@ -688,7 +770,7 @@ function RandomizeView({
 
         {items.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border p-10 text-center text-sm text-muted-foreground font-mono whitespace-pre-line">
-            {'Здесь появится результат, например:\n"Имена" "№ 3" "Анна"\n────────────────────\n"Глаголы" "№ 7" "бежит"'}
+            {'Здесь появится результат, например:\nИмена:\nАнна\n────────────────────\nГлаголы:\nбежит'}
           </div>
         ) : (
           <ul className="rounded-lg border border-input bg-background p-2">
@@ -708,7 +790,7 @@ function RandomizeView({
                       <path d="M3 21v-5h5" />
                     </svg>
                   </button>
-                  <div className="flex-1 px-2 py-2 font-mono text-sm break-words">
+                  <div className="flex-1 px-2 py-2 font-mono text-sm break-words whitespace-pre-line">
                     {formatItem(it)}
                   </div>
                 </div>
@@ -853,7 +935,7 @@ function SavedView({
   };
 
   const formatItem = (it: GenItem) =>
-    `"${it.tableName}" "№ ${it.idx + 1}" "${it.row.join(" | ")}"`;
+    `${it.tableName}:\n${it.row.join(" | ")}`;
 
   const formatDate = (ts: number) => {
     try {
@@ -938,7 +1020,7 @@ function SavedView({
           <ul className="rounded-lg border border-input bg-card p-2">
             {opened.items.map((it, idx) => (
               <li key={it.tableId + ":" + idx}>
-                <div className="px-3 py-3 font-mono text-sm break-words">
+                <div className="px-3 py-3 font-mono text-sm break-words whitespace-pre-line">
                   {formatItem(it)}
                 </div>
                 {idx < opened.items.length - 1 && (
@@ -1107,6 +1189,66 @@ export default function App() {
   const [entities, setEntities] = useState<Entity[]>(initial.entities);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(initial.selectedEntityId);
   const [saved, setSaved] = useState<SavedGeneration[]>(initialSaved);
+  // Per-entity in-memory generation state. Not persisted to localStorage —
+  // closing the tab loses it (with a warning if anything is unsaved).
+  // Absence of an entry == "user has not generated for this entity yet" == saved.
+  const [genByEntity, setGenByEntity] = useState<
+    Record<string, { items: GenItem[]; saved: boolean }>
+  >({});
+
+  const setGenItems = (entityId: string, items: GenItem[], saved: boolean) => {
+    setGenByEntity((prev) => ({ ...prev, [entityId]: { items, saved } }));
+  };
+  const unsavedIds = new Set(
+    Object.entries(genByEntity)
+      .filter(([, v]) => v.items.length > 0 && !v.saved)
+      .map(([k]) => k),
+  );
+
+  const markGenSaved = (entityId: string) => {
+    setGenByEntity((prev) => {
+      const cur = prev[entityId];
+      if (!cur) return prev;
+      return { ...prev, [entityId]: { ...cur, saved: true } };
+    });
+  };
+
+  // Drop generation state for entities that no longer exist
+  useEffect(() => {
+    setGenByEntity((prev) => {
+      const validIds = new Set(entities.map((e) => e.id));
+      let changed = false;
+      const next: typeof prev = {};
+      for (const [k, v] of Object.entries(prev)) {
+        if (validIds.has(k)) next[k] = v;
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [entities]);
+
+  // Warn before closing if any entity has an unsaved generation
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      const unsavedNames: string[] = [];
+      for (const ent of entities) {
+        const g = genByEntity[ent.id];
+        if (g && g.items.length > 0 && !g.saved) {
+          unsavedNames.push(ent.name);
+        }
+      }
+      if (unsavedNames.length === 0) return;
+      const msg =
+        `Данные текущей генерации будут потеряны, если не нажать «Сохранить». ` +
+        `Не сохранены сущности: ${unsavedNames.join(", ")}.`;
+      e.preventDefault();
+      // Some browsers still read returnValue / the return value to show a dialog
+      e.returnValue = msg;
+      return msg;
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [entities, genByEntity]);
 
   useEffect(() => {
     try {
@@ -1137,6 +1279,7 @@ export default function App() {
       { id: uid(), name: name || undefined, sourceEntityId, sourceEntityName, createdAt: Date.now(), items },
       ...prev,
     ]);
+    markGenSaved(sourceEntityId);
   };
 
   // listen for create-entity events fired from RandomizeView's "Новая" button
@@ -1240,6 +1383,7 @@ export default function App() {
             setEntities={setEntities}
             selectedEntityId={selectedEntityId}
             setSelectedEntityId={setSelectedEntityId}
+            unsavedIds={unsavedIds}
           />
         )}
         {view === "randomize" && (
@@ -1247,7 +1391,12 @@ export default function App() {
             entities={entities}
             selectedEntityId={selectedEntityId}
             setSelectedEntityId={setSelectedEntityId}
+            items={
+              selectedEntityId ? genByEntity[selectedEntityId]?.items ?? [] : []
+            }
+            setItems={setGenItems}
             onSave={handleSaveGeneration}
+            unsavedIds={unsavedIds}
           />
         )}
         {view === "saved" && (
