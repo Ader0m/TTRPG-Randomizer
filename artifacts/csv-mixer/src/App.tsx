@@ -568,7 +568,7 @@ function RandomizeView({
   const canGenerate = tables.length > 0 && tables.some((t) => t.rows.length > 0);
 
   const formatItem = (it: GenItem) =>
-    `"${it.tableName}" "№ ${it.idx + 1}" "${it.row.join(" | ")}"`;
+    `${it.tableName}:\n${it.row.join(" | ")}`;
 
   const generate = () => {
     if (!entity) return;
@@ -688,7 +688,7 @@ function RandomizeView({
 
         {items.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border p-10 text-center text-sm text-muted-foreground font-mono whitespace-pre-line">
-            {'Здесь появится результат, например:\n"Имена" "№ 3" "Анна"\n────────────────────\n"Глаголы" "№ 7" "бежит"'}
+            {'Здесь появится результат, например:\nИмена:\nАнна\n────────────────────\nГлаголы:\nбежит'}
           </div>
         ) : (
           <ul className="rounded-lg border border-input bg-background p-2">
@@ -708,7 +708,7 @@ function RandomizeView({
                       <path d="M3 21v-5h5" />
                     </svg>
                   </button>
-                  <div className="flex-1 px-2 py-2 font-mono text-sm break-words">
+                  <div className="flex-1 px-2 py-2 font-mono text-sm break-words whitespace-pre-line">
                     {formatItem(it)}
                   </div>
                 </div>
@@ -853,7 +853,7 @@ function SavedView({
   };
 
   const formatItem = (it: GenItem) =>
-    `"${it.tableName}" "№ ${it.idx + 1}" "${it.row.join(" | ")}"`;
+    `${it.tableName}:\n${it.row.join(" | ")}`;
 
   const formatDate = (ts: number) => {
     try {
@@ -938,7 +938,7 @@ function SavedView({
           <ul className="rounded-lg border border-input bg-card p-2">
             {opened.items.map((it, idx) => (
               <li key={it.tableId + ":" + idx}>
-                <div className="px-3 py-3 font-mono text-sm break-words">
+                <div className="px-3 py-3 font-mono text-sm break-words whitespace-pre-line">
                   {formatItem(it)}
                 </div>
                 {idx < opened.items.length - 1 && (
