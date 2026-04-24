@@ -307,6 +307,23 @@ function SettingsView({
     updateEntity(entity.id, (e) => ({ ...e, tables: e.tables.filter((t) => t.id !== tableId) }));
   };
 
+  const moveTable = (tableId: string, where: "top" | "up" | "down" | "bottom") => {
+    if (!entity) return;
+    updateEntity(entity.id, (e) => {
+      const idx = e.tables.findIndex((t) => t.id === tableId);
+      if (idx === -1) return e;
+      const next = [...e.tables];
+      const [item] = next.splice(idx, 1);
+      let target = idx;
+      if (where === "top") target = 0;
+      else if (where === "bottom") target = next.length;
+      else if (where === "up") target = Math.max(0, idx - 1);
+      else if (where === "down") target = Math.min(next.length, idx + 1);
+      next.splice(target, 0, item);
+      return { ...e, tables: next };
+    });
+  };
+
   const renameTable = (tableId: string, name: string) => {
     if (!entity) return;
     if (isTableNameTaken(entity.id, name, tableId)) {
@@ -502,8 +519,47 @@ function SettingsView({
             </div>
           ) : (
             <div className="space-y-3">
-              {entity.tables.map((t) => (
-                <div key={t.id} className="border border-border rounded-lg p-4 bg-background">
+              {entity.tables.map((t, tIdx) => (
+                <div key={t.id} className="flex items-stretch gap-2">
+                  <div className="flex flex-col gap-1 shrink-0">
+                    <button
+                      onClick={() => moveTable(t.id, "top")}
+                      disabled={tIdx === 0}
+                      title="В начало"
+                      aria-label="В начало"
+                      className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-accent hover:bg-accent/10 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 11 12 6 7 11" /><polyline points="17 18 12 13 7 18" /></svg>
+                    </button>
+                    <button
+                      onClick={() => moveTable(t.id, "up")}
+                      disabled={tIdx === 0}
+                      title="Выше"
+                      aria-label="Выше"
+                      className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-accent hover:bg-accent/10 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15" /></svg>
+                    </button>
+                    <button
+                      onClick={() => moveTable(t.id, "down")}
+                      disabled={tIdx === entity.tables.length - 1}
+                      title="Ниже"
+                      aria-label="Ниже"
+                      className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-accent hover:bg-accent/10 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+                    </button>
+                    <button
+                      onClick={() => moveTable(t.id, "bottom")}
+                      disabled={tIdx === entity.tables.length - 1}
+                      title="В конец"
+                      aria-label="В конец"
+                      className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-accent hover:bg-accent/10 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="7 13 12 18 17 13" /><polyline points="7 6 12 11 17 6" /></svg>
+                    </button>
+                  </div>
+                  <div className="flex-1 border border-border rounded-lg p-4 bg-background">
                   <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
                     <div className="flex items-center gap-2 flex-1 min-w-[200px]">
                       <TableNameInput
@@ -534,6 +590,7 @@ function SettingsView({
                         ))}
                       </tbody>
                     </table>
+                  </div>
                   </div>
                 </div>
               ))}
