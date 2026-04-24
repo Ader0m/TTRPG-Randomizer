@@ -610,14 +610,17 @@ function RandomizeView({
   entities,
   selectedEntityId,
   setSelectedEntityId,
+  items,
+  setItems,
   onSave,
 }: {
   entities: Entity[];
   selectedEntityId: string | null;
   setSelectedEntityId: (id: string | null) => void;
+  items: GenItem[];
+  setItems: (entityId: string, items: GenItem[], saved: boolean) => void;
   onSave: (sourceEntityId: string, sourceEntityName: string, items: GenItem[], name: string) => void;
 }) {
-  const [items, setItems] = useState<GenItem[]>([]);
   const [justSaved, setJustSaved] = useState(false);
   const entity = entities.find((e) => e.id === selectedEntityId) ?? null;
   const tables = entity?.tables ?? [];
@@ -635,7 +638,7 @@ function RandomizeView({
       const idx = pickRandomIndex(t.rows.length);
       next.push({ tableId: t.id, tableName: t.name, idx, row: t.rows[idx] });
     }
-    setItems(next);
+    setItems(entity.id, next, false);
     setJustSaved(false);
   };
 
@@ -656,13 +659,12 @@ function RandomizeView({
     const t = entity.tables.find((x) => x.id === tableId);
     if (!t || t.rows.length === 0) return;
     const idx = pickRandomIndex(t.rows.length);
-    setItems((prev) =>
-      prev.map((it) =>
-        it.tableId === tableId
-          ? { tableId: t.id, tableName: t.name, idx, row: t.rows[idx] }
-          : it,
-      ),
+    const next = items.map((it) =>
+      it.tableId === tableId
+        ? { tableId: t.id, tableName: t.name, idx, row: t.rows[idx] }
+        : it,
     );
+    setItems(entity.id, next, false);
   };
 
   const copy = () => {
@@ -1164,6 +1166,60 @@ export default function App() {
   const [entities, setEntities] = useState<Entity[]>(initial.entities);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(initial.selectedEntityId);
   const [saved, setSaved] = useState<SavedGeneration[]>(initialSaved);
+  // Per-entity in-memory generation state. Not persisted to localStorage —
+  // closing the tab loses it (with a warning if anything is unsaved).
+  // Absence of an entry == "user has not generated for this entity yet" == saved.
+  const [genByEntity, setGenByEntity] = useState<
+    Record<string, { items: GenItem[]; saved: boolean }>
+  >({});
+
+  const setGenItems = (entityId: string, items: GenItem[], saved: boolean) => {
+    setGenByEntity((prev) => ({ ...prev, [entityId]: { items, saved } }));
+  };
+  const markGenSaved = (entityId: string) => {
+    setGenByEntity((prev) => {
+      const cur = prev[entityId];
+      if (!cur) return prev;
+      return { ...prev, [entityId]: { ...cur, saved: true } };
+    });
+  };
+
+  // Drop generation state for entities that no longer exist
+  useEffect(() => {
+    setGenByEntity((prev) => {
+      const validIds = new Set(entities.map((e) => e.id));
+      let changed = false;
+      const next: typeof prev = {};
+      for (const [k, v] of Object.entries(prev)) {
+        if (validIds.has(k)) next[k] = v;
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [entities]);
+
+  // Warn before closing if any entity has an unsaved generation
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      const unsavedNames: string[] = [];
+      for (const ent of entities) {
+        const g = genByEntity[ent.id];
+        if (g && g.items.length > 0 && !g.saved) {
+          unsavedNames.push(ent.name);
+        }
+      }
+      if (unsavedNames.length === 0) return;
+      const msg =
+        `Данные текущей генерации будут потеряны, если не нажать «Сохранить». ` +
+        `Не сохранены сущности: ${unsavedNames.join(", ")}.`;
+      e.preventDefault();
+      // Some browsers still read returnValue / the return value to show a dialog
+      e.returnValue = msg;
+      return msg;
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [entities, genByEntity]);
 
   useEffect(() => {
     try {
@@ -1194,6 +1250,7 @@ export default function App() {
       { id: uid(), name: name || undefined, sourceEntityId, sourceEntityName, createdAt: Date.now(), items },
       ...prev,
     ]);
+    markGenSaved(sourceEntityId);
   };
 
   // listen for create-entity events fired from RandomizeView's "Новая" button
@@ -1304,6 +1361,10 @@ export default function App() {
             entities={entities}
             selectedEntityId={selectedEntityId}
             setSelectedEntityId={setSelectedEntityId}
+            items={
+              selectedEntityId ? genByEntity[selectedEntityId]?.items ?? [] : []
+            }
+            setItems={setGenItems}
             onSave={handleSaveGeneration}
           />
         )}
