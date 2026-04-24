@@ -109,6 +109,7 @@ function EntityPicker({
   onCreate,
   onDelete,
   onRename,
+  unsavedIds,
 }: {
   entities: Entity[];
   selectedId: string | null;
@@ -116,22 +117,38 @@ function EntityPicker({
   onCreate: () => void;
   onDelete?: (id: string) => void;
   onRename?: (id: string, name: string) => void;
+  unsavedIds?: Set<string>;
 }) {
   const selected = entities.find((e) => e.id === selectedId) ?? null;
+  const selectedUnsaved = !!(selected && unsavedIds?.has(selected.id));
   return (
     <div className="flex items-center gap-2 flex-wrap">
-      <select
-        value={selectedId ?? ""}
-        onChange={(e) => onSelect(e.target.value)}
-        className="px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring min-w-[200px]"
-      >
-        {entities.length === 0 && <option value="">— нет сущностей —</option>}
-        {entities.map((e) => (
-          <option key={e.id} value={e.id}>
-            {e.name} ({e.tables.length})
-          </option>
-        ))}
-      </select>
+      <div className="relative">
+        <select
+          value={selectedId ?? ""}
+          onChange={(e) => onSelect(e.target.value)}
+          className={`px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring min-w-[200px] ${
+            selectedUnsaved ? "pr-9" : ""
+          }`}
+        >
+          {entities.length === 0 && <option value="">— нет сущностей —</option>}
+          {entities.map((e) => {
+            const dot = unsavedIds?.has(e.id) ? "● " : "";
+            return (
+              <option key={e.id} value={e.id}>
+                {dot}{e.name} ({e.tables.length})
+              </option>
+            );
+          })}
+        </select>
+        {selectedUnsaved && (
+          <span
+            className="pointer-events-none absolute right-7 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-background"
+            title="Есть несохранённая генерация"
+            aria-label="Есть несохранённая генерация"
+          />
+        )}
+      </div>
       <button
         onClick={onCreate}
         className="px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition inline-flex items-center gap-1.5"
@@ -211,11 +228,13 @@ function SettingsView({
   setEntities,
   selectedEntityId,
   setSelectedEntityId,
+  unsavedIds,
 }: {
   entities: Entity[];
   setEntities: React.Dispatch<React.SetStateAction<Entity[]>>;
   selectedEntityId: string | null;
   setSelectedEntityId: (id: string | null) => void;
+  unsavedIds: Set<string>;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const entity = entities.find((e) => e.id === selectedEntityId) ?? null;
@@ -485,6 +504,7 @@ function SettingsView({
           onCreate={createEntity}
           onDelete={deleteEntity}
           onRename={renameEntity}
+          unsavedIds={unsavedIds}
         />
       </section>
 
@@ -613,6 +633,7 @@ function RandomizeView({
   items,
   setItems,
   onSave,
+  unsavedIds,
 }: {
   entities: Entity[];
   selectedEntityId: string | null;
@@ -620,6 +641,7 @@ function RandomizeView({
   items: GenItem[];
   setItems: (entityId: string, items: GenItem[], saved: boolean) => void;
   onSave: (sourceEntityId: string, sourceEntityName: string, items: GenItem[], name: string) => void;
+  unsavedIds: Set<string>;
 }) {
   const [justSaved, setJustSaved] = useState(false);
   const entity = entities.find((e) => e.id === selectedEntityId) ?? null;
@@ -695,6 +717,7 @@ function RandomizeView({
             const ev = new CustomEvent("create-entity", { detail: name.trim() });
             window.dispatchEvent(ev);
           }}
+          unsavedIds={unsavedIds}
         />
       </section>
 
@@ -1176,6 +1199,12 @@ export default function App() {
   const setGenItems = (entityId: string, items: GenItem[], saved: boolean) => {
     setGenByEntity((prev) => ({ ...prev, [entityId]: { items, saved } }));
   };
+  const unsavedIds = new Set(
+    Object.entries(genByEntity)
+      .filter(([, v]) => v.items.length > 0 && !v.saved)
+      .map(([k]) => k),
+  );
+
   const markGenSaved = (entityId: string) => {
     setGenByEntity((prev) => {
       const cur = prev[entityId];
@@ -1354,6 +1383,7 @@ export default function App() {
             setEntities={setEntities}
             selectedEntityId={selectedEntityId}
             setSelectedEntityId={setSelectedEntityId}
+            unsavedIds={unsavedIds}
           />
         )}
         {view === "randomize" && (
@@ -1366,6 +1396,7 @@ export default function App() {
             }
             setItems={setGenItems}
             onSave={handleSaveGeneration}
+            unsavedIds={unsavedIds}
           />
         )}
         {view === "saved" && (
