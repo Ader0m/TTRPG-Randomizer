@@ -228,13 +228,11 @@ function SettingsView({
   setEntities,
   selectedEntityId,
   setSelectedEntityId,
-  unsavedIds,
 }: {
   entities: Entity[];
   setEntities: React.Dispatch<React.SetStateAction<Entity[]>>;
   selectedEntityId: string | null;
   setSelectedEntityId: (id: string | null) => void;
-  unsavedIds: Set<string>;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const entity = entities.find((e) => e.id === selectedEntityId) ?? null;
@@ -504,7 +502,6 @@ function SettingsView({
           onCreate={createEntity}
           onDelete={deleteEntity}
           onRename={renameEntity}
-          unsavedIds={unsavedIds}
         />
       </section>
 
@@ -1383,7 +1380,6 @@ export default function App() {
             setEntities={setEntities}
             selectedEntityId={selectedEntityId}
             setSelectedEntityId={setSelectedEntityId}
-            unsavedIds={unsavedIds}
           />
         )}
         {view === "randomize" && (
