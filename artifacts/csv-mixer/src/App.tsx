@@ -2,10 +2,17 @@ import { useState, useRef, useEffect, useMemo } from "react";
 
 type Row = string[];
 
+interface CellLink {
+  row: number;
+  col: number;
+  nestedEntityId: string;
+}
+
 interface Table {
   id: string;
   name: string;
   rows: Row[];
+  links?: CellLink[];
 }
 
 interface Entity {
@@ -91,7 +98,26 @@ function uid() {
 
 type View = "settings" | "randomize" | "saved";
 
-type GenItem = { tableId: string; tableName: string; idx: number; row: Row };
+interface NestedItem {
+  entityId: string;
+  entityName: string;
+  items: GenItem[];
+}
+
+interface NestedCell {
+  row: number;
+  col: number;
+  value: string;
+  nested: NestedItem;
+}
+
+type GenItem = {
+  tableId: string;
+  tableName: string;
+  idx: number;
+  row: Row;
+  cells?: NestedCell[];
+};
 
 interface SavedGeneration {
   id: string;
@@ -100,6 +126,284 @@ interface SavedGeneration {
   sourceEntityName: string;
   createdAt: number;
   items: GenItem[];
+}
+
+/**
+ * Returns the set of entity ids that can reach `targetId` by following
+ * nested-generation links (cell links → nestedEntityId), INCLUDING targetId itself.
+ *
+ * Used to forbid cycles when the user wires up a new "+":
+ * when editing entity E, we must hide from the picker every entity X such that
+ * X is already reachable to E — i.e. E can already reach X transitively, or X === E.
+ * Adding E→X then would close a cycle. Concretely we hide getReachableTo(E).
+ */
+function getReachableTo(targetId: string, entities: Entity[]): Set<string> {
+  // Build reverse adjacency: for each entity, the set of ids that point TO it.
+  // forward edge: ownerEntityId --(a cell link)--> nestedEntityId
+  // reverse adjacency[nested] = { owner }
+  const reverse = new Map<string, Set<string>>();
+  for (const ent of entities) {
+    for (const t of ent.tables) {
+      if (!t.links) continue;
+      for (const link of t.links) {
+        let set = reverse.get(link.nestedEntityId);
+        if (!set) {
+          set = new Set();
+          reverse.set(link.nestedEntityId, set);
+        }
+        set.add(ent.id);
+      }
+    }
+  }
+  const result = new Set<string>([targetId]);
+  const stack = [targetId];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    const owners = reverse.get(cur);
+    if (!owners) continue;
+    for (const owner of owners) {
+      if (!result.has(owner)) {
+        result.add(owner);
+        stack.push(owner);
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Picks a random row from `table` and recursively resolves every cell link
+ * that fires on the chosen row index (link.row === idx). `visited` guards
+ * against pathological cycles in case of corrupted/manual data.
+ */
+function generateTableItem(
+  table: Table,
+  entitiesById: Map<string, Entity>,
+  visited: Set<string>,
+): GenItem {
+  const idx = pickRandomIndex(table.rows.length);
+  const row = table.rows[idx];
+  const cells: NestedCell[] = [];
+  if (table.links && table.links.length > 0) {
+    for (const link of table.links) {
+      if (link.row !== idx) continue;
+      if (visited.has(link.nestedEntityId)) continue; // cycle guard
+      const nestedEntity = entitiesById.get(link.nestedEntityId);
+      if (!nestedEntity) continue; // dangling link (entity deleted)
+      const usableTables = nestedEntity.tables.filter((t) => t.rows.length > 0);
+      if (usableTables.length === 0) continue;
+      const nextVisited = new Set(visited);
+      nextVisited.add(nestedEntity.id);
+      const nestedItems = usableTables.map((t) =>
+        generateTableItem(t, entitiesById, nextVisited),
+      );
+      const value = row[link.col] ?? "";
+      cells.push({
+        row: link.row,
+        col: link.col,
+        value,
+        nested: { entityId: nestedEntity.id, entityName: nestedEntity.name, items: nestedItems },
+      });
+    }
+  }
+  const item: GenItem = {
+    tableId: table.id,
+    tableName: table.name,
+    idx,
+    row,
+  };
+  if (cells.length > 0) item.cells = cells;
+  return item;
+}
+
+/**
+ * Renders generation items to a plain-text string with 4-space indentation
+ * per nesting depth. Top-level items are separated by a horizontal rule.
+ */
+function formatItemsText(items: GenItem[], depth = 0): string {
+  const pad = "    ".repeat(depth);
+  return items
+    .map((it) => {
+      const head = `${pad}${it.tableName}:\n${pad}${it.row.join(" | ")}`;
+      const nested = it.cells && it.cells.length > 0
+        ? it.cells
+            .map((c) => {
+              const nestedPad = "    ".repeat(depth + 1);
+              const nestedText = `${nestedPad}↳ ${c.nested.entityName}\n${formatItemsText(
+                c.nested.items,
+                depth + 1,
+              )}`;
+              return nestedText;
+            })
+            .join("\n")
+        : "";
+      return nested ? `${head}\n${nested}` : head;
+    })
+    .join(depth === 0 ? "\n────────────────────\n" : "\n");
+}
+
+/**
+ * Recursively renders generation items with left padding per nesting depth
+ * (4 spaces / 16px per level). Nested results show a dimmed "↳ {entityName}"
+ * header above their tables. Designed for both the Randomize view and the
+ * Saved overlay (read-only, no re-roll buttons here).
+ */
+function GenItemBlock({
+  items,
+  depth = 0,
+  separator = false,
+}: {
+  items: GenItem[];
+  depth?: number;
+  /** Render a divider between top-level items (used in Randomize list). */
+  separator?: boolean;
+}) {
+  return (
+    <div>
+      {items.map((it, idx) => (
+        <div key={it.tableId + ":" + idx}>
+          <div
+            className={`font-mono text-sm break-words whitespace-pre-line ${
+              depth > 0 ? "text-foreground/80" : ""
+            }`}
+            style={depth > 0 ? { paddingLeft: `${depth * 16}px` } : undefined}
+          >
+            <span className="font-medium">{it.tableName}:</span>
+            {"\n"}
+            {it.row.join(" | ")}
+          </div>
+          {it.cells && it.cells.length > 0 && (
+            <div style={{ paddingLeft: `${depth * 16}px` }}>
+              {it.cells.map((c, ci) => (
+                <div key={ci} className="mt-0.5">
+                  <div
+                    className="font-mono text-xs text-accent/80"
+                    style={{ paddingLeft: `${16}px` }}
+                  >
+                    ↳ {c.nested.entityName}
+                  </div>
+                  <GenItemBlock items={c.nested.items} depth={depth + 1} />
+                </div>
+              ))}
+            </div>
+          )}
+          {separator && idx < items.length - 1 && (
+            <div className="my-1 border-t border-border" style={{ marginLeft: depth > 0 ? `${depth * 16}px` : undefined }} />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Per-cell control rendered in the Settings table view.
+ * - No link yet: shows a dim "+" icon (hover accent) that opens the picker.
+ * - Link set: shows a compact badge with the nested entity's name; the badge
+ *   re-opens the picker on click, and an "×" button clears the link.
+ *
+ * `available` is the pre-filtered list of entities the user is allowed to pick
+ * (already excludes anything that would create a cycle, plus the current entity).
+ * `linkedName` is resolved by the parent so a dangling link shows "(удалена)".
+ */
+function CellLinkControl({
+  available,
+  linkedName,
+  onPick,
+  onClear,
+}: {
+  available: Entity[];
+  linkedName: string | null;
+  onPick: (entityId: string) => void;
+  onClear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative inline-flex items-center" ref={ref}>
+      {linkedName === null ? (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          title="Добавить вложенную генерацию"
+          aria-label="Добавить вложенную генерацию"
+          className="ml-2 inline-flex items-center justify-center w-5 h-5 rounded text-muted-foreground/50 hover:text-accent hover:bg-accent/10 transition shrink-0"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+        </button>
+      ) : (
+        <span className="ml-2 inline-flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-accent/10 text-accent hover:bg-accent/20 transition max-w-[120px] truncate"
+            title={`Вложенная генерация: ${linkedName}`}
+          >
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><polyline points="9 18 15 12 9 6" /></svg>
+            <span className="truncate">{linkedName}</span>
+          </button>
+          <button
+            type="button"
+            onClick={onClear}
+            title="Убрать вложенную генерацию"
+            aria-label="Убрать вложенную генерацию"
+            className="inline-flex items-center justify-center w-4 h-4 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+          </button>
+        </span>
+      )}
+
+      {open && (
+        <div className="absolute right-0 top-full z-20 mt-1 min-w-[200px] max-w-[260px] rounded-lg border border-border bg-popover text-popover-foreground shadow-lg">
+          <div className="px-3 py-2 text-xs font-semibold border-b border-border">
+            Выберите вложенную генерацию
+          </div>
+          {available.length === 0 ? (
+            <div className="px-3 py-3 text-xs text-muted-foreground">
+              Нет доступных сущностей
+            </div>
+          ) : (
+            <ul className="max-h-56 overflow-y-auto py-1">
+              {available.map((e) => (
+                <li key={e.id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onPick(e.id);
+                      setOpen(false);
+                    }}
+                    className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent/10 transition truncate"
+                    title={e.name}
+                  >
+                    {e.name}
+                    <span className="text-muted-foreground"> ({e.tables.length})</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function EntityPicker({
@@ -237,6 +541,15 @@ function SettingsView({
   const fileRef = useRef<HTMLInputElement>(null);
   const entity = entities.find((e) => e.id === selectedEntityId) ?? null;
 
+  // Entities selectable as a nested generation for the current entity.
+  // Excludes the current entity and anything already reachable to it, so that
+  // wiring a "+" can never close a cycle (A→A or A→B→A).
+  const availableEntities = useMemo(() => {
+    if (!entity) return [];
+    const blocked = getReachableTo(entity.id, entities);
+    return entities.filter((e) => !blocked.has(e.id));
+  }, [entity, entities]);
+
   const updateEntity = (id: string, fn: (e: Entity) => Entity) => {
     setEntities((prev) => prev.map((e) => (e.id === id ? fn(e) : e)));
   };
@@ -282,7 +595,22 @@ function SettingsView({
 
   const deleteEntity = (id: string) => {
     setEntities((prev) => {
-      const next = prev.filter((e) => e.id !== id);
+      const next = prev
+        .filter((e) => e.id !== id)
+        // Purge dangling cell links pointing at the deleted entity, across
+        // every other entity's tables.
+        .map((e) => {
+          if (!e.tables.some((t) => t.links && t.links.length > 0)) return e;
+          let changed = false;
+          const tables = e.tables.map((t) => {
+            if (!t.links || t.links.length === 0) return t;
+            const filtered = t.links.filter((l) => l.nestedEntityId !== id);
+            if (filtered.length === t.links.length) return t;
+            changed = true;
+            return { ...t, links: filtered };
+          });
+          return changed ? { ...e, tables } : e;
+        });
       if (selectedEntityId === id) {
         setSelectedEntityId(next[0]?.id ?? null);
       }
@@ -353,6 +681,35 @@ function SettingsView({
     }));
   };
 
+  const setCellLink = (tableId: string, row: number, col: number, nestedEntityId: string) => {
+    if (!entity) return;
+    updateEntity(entity.id, (e) => ({
+      ...e,
+      tables: e.tables.map((t) => {
+        if (t.id !== tableId) return t;
+        const others = (t.links ?? []).filter(
+          (l) => !(l.row === row && l.col === col),
+        );
+        return { ...t, links: [...others, { row, col, nestedEntityId }] };
+      }),
+    }));
+  };
+
+  const clearCellLink = (tableId: string, row: number, col: number) => {
+    if (!entity) return;
+    updateEntity(entity.id, (e) => ({
+      ...e,
+      tables: e.tables.map((t) => {
+        if (t.id !== tableId || !t.links || t.links.length === 0) return t;
+        const filtered = t.links.filter(
+          (l) => !(l.row === row && l.col === col),
+        );
+        if (filtered.length === t.links.length) return t;
+        return { ...t, links: filtered };
+      }),
+    }));
+  };
+
   const importRef = useRef<HTMLInputElement>(null);
 
   const exportEntities = () => {
@@ -392,6 +749,9 @@ function SettingsView({
         return;
       }
       const incoming: Entity[] = [];
+      // Map original entity id -> new generated id, so cell links can be
+      // re-pointed after import (each imported entity/table gets a fresh uid).
+      const idRemap = new Map<string, string>();
       for (const raw of arr) {
         if (!raw || typeof raw !== "object") continue;
         const r = raw as Record<string, unknown>;
@@ -407,9 +767,50 @@ function SettingsView({
               rows.push(rowRaw as string[]);
             }
           }
-          tables.push({ id: uid(), name: tr.name, rows });
+          // Preserve cell links if present and well-formed (defensive).
+          // nestedEntityId is remapped below, after all ids are known.
+          let links: CellLink[] | undefined;
+          if (Array.isArray(tr.links)) {
+            const valid: CellLink[] = [];
+            for (const lRaw of tr.links) {
+              if (!lRaw || typeof lRaw !== "object") continue;
+              const lr = lRaw as Record<string, unknown>;
+              if (
+                typeof lr.nestedEntityId === "string" &&
+                typeof lr.row === "number" &&
+                typeof lr.col === "number" &&
+                lr.row >= 0 && lr.row < rows.length &&
+                lr.col >= 0
+              ) {
+                valid.push({
+                  row: lr.row,
+                  col: lr.col,
+                  nestedEntityId: lr.nestedEntityId,
+                });
+              }
+            }
+            if (valid.length > 0) links = valid;
+          }
+          const table: Table = { id: uid(), name: tr.name, rows };
+          if (links) table.links = links;
+          tables.push(table);
         }
-        incoming.push({ id: uid(), name: r.name, tables });
+        const newEntityId = uid();
+        if (typeof r.id === "string") idRemap.set(r.id, newEntityId);
+        incoming.push({ id: newEntityId, name: r.name, tables });
+      }
+      // Re-point cell links to remapped entity ids; drop links that no longer
+      // resolve (e.g. pointing to an entity not included in the export).
+      for (const ent of incoming) {
+        for (const t of ent.tables) {
+          if (!t.links || t.links.length === 0) continue;
+          const remapped: CellLink[] = [];
+          for (const l of t.links) {
+            const target = idRemap.get(l.nestedEntityId);
+            if (target) remapped.push({ ...l, nestedEntityId: target });
+          }
+          t.links = remapped.length > 0 ? remapped : undefined;
+        }
       }
       if (incoming.length === 0) {
         alert("В файле не найдено подходящих сущностей.");
@@ -597,14 +998,49 @@ function SettingsView({
                   <div className="overflow-x-auto max-h-64 overflow-y-auto">
                     <table className="text-xs w-full">
                       <tbody>
-                        {t.rows.map((r, i) => (
+                        {t.rows.map((r, i) => {
+                          const linkByCol = new Map<number, CellLink>();
+                          for (const l of t.links ?? []) {
+                            if (l.row === i) linkByCol.set(l.col, l);
+                          }
+                          return (
                           <tr key={i} className="border-b border-border/50 last:border-0">
-                            <td className="px-2 py-1.5 text-muted-foreground font-mono w-10">{i + 1}</td>
-                            {r.map((c, j) => (
-                              <td key={j} className="px-2 py-1.5">{c}</td>
-                            ))}
+                            <td className="px-2 py-1.5 text-muted-foreground font-mono w-10 align-top">{i + 1}</td>
+                            {r.map((c, j) => {
+                              const link = linkByCol.get(j) ?? null;
+                              const linkedEntity = link
+                                ? entities.find((e) => e.id === link.nestedEntityId) ?? null
+                                : null;
+                              const linkedName = link
+                                ? (linkedEntity ? linkedEntity.name : "(удалена)")
+                                : null;
+                              return (
+                                <td key={j} className="px-2 py-1.5 align-top">
+                                  <div className="inline-flex items-center max-w-full">
+                                    <span className="break-words whitespace-pre-line">{c}</span>
+                                    {(!link || !linkedEntity) && (
+                                      <CellLinkControl
+                                        available={availableEntities}
+                                        linkedName={null}
+                                        onPick={(eid) => setCellLink(t.id, i, j, eid)}
+                                        onClear={() => clearCellLink(t.id, i, j)}
+                                      />
+                                    )}
+                                    {link && linkedEntity && (
+                                      <CellLinkControl
+                                        available={availableEntities}
+                                        linkedName={linkedName}
+                                        onPick={(eid) => setCellLink(t.id, i, j, eid)}
+                                        onClear={() => clearCellLink(t.id, i, j)}
+                                      />
+                                    )}
+                                  </div>
+                                </td>
+                              );
+                            })}
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -646,17 +1082,18 @@ function RandomizeView({
 
   const canGenerate = tables.length > 0 && tables.some((t) => t.rows.length > 0);
 
-  const formatItem = (it: GenItem) =>
-    `${it.tableName}:\n${it.row.join(" | ")}`;
+  const entitiesById = useMemo(() => {
+    const m = new Map<string, Entity>();
+    for (const e of entities) m.set(e.id, e);
+    return m;
+  }, [entities]);
 
   const generate = () => {
     if (!entity) return;
-    const next: GenItem[] = [];
-    for (const t of entity.tables) {
-      if (t.rows.length === 0) continue;
-      const idx = pickRandomIndex(t.rows.length);
-      next.push({ tableId: t.id, tableName: t.name, idx, row: t.rows[idx] });
-    }
+    const visited = new Set<string>([entity.id]);
+    const next: GenItem[] = entity.tables
+      .filter((t) => t.rows.length > 0)
+      .map((t) => generateTableItem(t, entitiesById, visited));
     setItems(entity.id, next, false);
     setJustSaved(false);
   };
@@ -677,19 +1114,15 @@ function RandomizeView({
     if (!entity) return;
     const t = entity.tables.find((x) => x.id === tableId);
     if (!t || t.rows.length === 0) return;
-    const idx = pickRandomIndex(t.rows.length);
-    const next = items.map((it) =>
-      it.tableId === tableId
-        ? { tableId: t.id, tableName: t.name, idx, row: t.rows[idx] }
-        : it,
-    );
+    const visited = new Set<string>([entity.id]);
+    const regenerated = generateTableItem(t, entitiesById, visited);
+    const next = items.map((it) => (it.tableId === tableId ? regenerated : it));
     setItems(entity.id, next, false);
   };
 
   const copy = () => {
     if (items.length === 0) return;
-    const text = items.map(formatItem).join("\n────────────────────\n");
-    navigator.clipboard?.writeText(text);
+    navigator.clipboard?.writeText(formatItemsText(items));
   };
 
   return (
@@ -787,8 +1220,8 @@ function RandomizeView({
                       <path d="M3 21v-5h5" />
                     </svg>
                   </button>
-                  <div className="flex-1 px-2 py-2 font-mono text-sm break-words whitespace-pre-line">
-                    {formatItem(it)}
+                  <div className="flex-1 px-2 py-2">
+                    <GenItemBlock items={[it]} />
                   </div>
                 </div>
                 {idx < items.length - 1 && (
@@ -931,9 +1364,6 @@ function SavedView({
     }
   };
 
-  const formatItem = (it: GenItem) =>
-    `${it.tableName}:\n${it.row.join(" | ")}`;
-
   const formatDate = (ts: number) => {
     try {
       return new Date(ts).toLocaleString("ru-RU");
@@ -1017,8 +1447,8 @@ function SavedView({
           <ul className="rounded-lg border border-input bg-card p-2">
             {opened.items.map((it, idx) => (
               <li key={it.tableId + ":" + idx}>
-                <div className="px-3 py-3 font-mono text-sm break-words whitespace-pre-line">
-                  {formatItem(it)}
+                <div className="px-3 py-3">
+                  <GenItemBlock items={[it]} separator />
                 </div>
                 {idx < opened.items.length - 1 && (
                   <div className="my-1 border-t border-border" />
@@ -1030,8 +1460,7 @@ function SavedView({
           <div className="mt-6 flex gap-2 flex-wrap">
             <button
               onClick={() => {
-                const text = opened.items.map(formatItem).join("\n────────────────────\n");
-                navigator.clipboard?.writeText(text);
+                navigator.clipboard?.writeText(formatItemsText(opened.items));
               }}
               className="px-3 py-2 rounded-lg border border-border text-sm hover:bg-muted transition"
             >
