@@ -429,9 +429,9 @@ function CellLinkControl({
             minWidth: `${menuPos.minWidth}px`,
             zIndex: 9999,
           }}
-          className="max-w-[260px] rounded-lg border border-border bg-popover text-popover-foreground shadow-lg"
+          className="max-w-[260px] rounded-lg border border-input bg-background text-foreground shadow-lg"
         >
-          <div className="px-3 py-2 text-xs font-semibold border-b border-border">
+          <div className="px-3 py-2 text-xs font-semibold border-b border-input">
             Выберите вложенную генерацию
           </div>
           {available.length === 0 ? (
