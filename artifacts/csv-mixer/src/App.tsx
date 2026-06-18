@@ -218,6 +218,70 @@ function generateTableItem(
 }
 
 /**
+ * Re-rolls a single table located by a `path` of indices into the generation
+ * tree. A path alternates table index and cell index:
+ *   [tableIdx, (cellIdx, tableIdx)*]
+ * Starting from the root entity's tables, we descend through nested cells.
+ *
+ * `ownerById` resolves the entity that owns the table at each level (the root
+ * entity for the first hop, then each nested cell's entity). `visited` is
+ * rebuilt per hop so the cycle guard stays consistent with generateTableItem.
+ *
+ * Returns a new array with the targeted table re-rolled (deep-immutable
+ * replacement); the input is not mutated. Returns null if the path is invalid.
+ */
+function regenInItems(
+  items: GenItem[],
+  path: number[],
+  rootEntity: Entity,
+  entitiesById: Map<string, Entity>,
+): GenItem[] | null {
+  if (path.length === 0) return null;
+  const tableIdx = path[0];
+  const target = items[tableIdx];
+  if (!target) return null;
+
+  if (path.length === 1) {
+    // Leaf: re-roll this table. Owner is `rootEntity` for the first hop;
+    // for deeper hops the owner is carried in `target.tableId`'s entity below.
+    const ownerEntity = rootEntity;
+    const table = ownerEntity.tables.find((t) => t.id === target.tableId);
+    if (!table || table.rows.length === 0) return null;
+    const visited = new Set<string>([ownerEntity.id]);
+    const regenerated = generateTableItem(table, entitiesById, visited);
+    const next = items.slice();
+    next[tableIdx] = regenerated;
+    return next;
+  }
+
+  // Descend into a nested cell. cellIdx = path[1], then recurse on that cell's
+  // nested.items with the remaining path (which starts at the next table idx).
+  const cellIdx = path[1];
+  const cell = target.cells?.[cellIdx];
+  if (!cell) return null;
+  const nestedEntity = entitiesById.get(cell.nested.entityId);
+  if (!nestedEntity) return null;
+  const subPath = path.slice(2);
+  const newNestedItems = regenInItems(
+    cell.nested.items,
+    subPath,
+    nestedEntity,
+    entitiesById,
+  );
+  if (!newNestedItems) return null;
+  const newCell: NestedCell = {
+    ...cell,
+    nested: { ...cell.nested, items: newNestedItems },
+  };
+  const newCells = target.cells ? target.cells.slice() : [];
+  newCells[cellIdx] = newCell;
+  const newItem: GenItem = { ...target, cells: newCells };
+  const next = items.slice();
+  next[tableIdx] = newItem;
+  return next;
+}
+
+/**
  * Renders generation items to a plain-text string with 4-space indentation
  * per nesting depth. Top-level items are separated by a horizontal rule.
  */
@@ -253,46 +317,74 @@ function GenItemBlock({
   items,
   depth = 0,
   separator = false,
+  onRegen,
+  pathPrefix = [],
 }: {
   items: GenItem[];
   depth?: number;
   /** Render a divider between top-level items (used in Randomize list). */
   separator?: boolean;
+  /** If provided, every table (at any depth) gets a re-roll button. */
+  onRegen?: (path: number[]) => void;
+  /** Index path from the root to this block (for addressing nested tables). */
+  pathPrefix?: number[];
 }) {
   return (
     <div>
-      {items.map((it, idx) => (
-        <div key={it.tableId + ":" + idx}>
-          <div
-            className={`font-mono text-sm break-words whitespace-pre-line ${
-              depth > 0 ? "text-foreground/80" : ""
-            }`}
-            style={depth > 0 ? { paddingLeft: `${depth * 16}px` } : undefined}
-          >
-            <span className="font-medium">{it.tableName}:</span>
-            {"\n"}
-            {it.row.join(" | ")}
-          </div>
-          {it.cells && it.cells.length > 0 && (
-            <div style={{ paddingLeft: `${depth * 16}px` }}>
-              {it.cells.map((c, ci) => (
-                <div key={ci} className="mt-0.5">
-                  <div
-                    className="font-mono text-xs text-accent/80"
-                    style={{ paddingLeft: `${16}px` }}
-                  >
-                    ↳ {c.nested.entityName}
-                  </div>
-                  <GenItemBlock items={c.nested.items} depth={depth + 1} />
-                </div>
-              ))}
+      {items.map((it, idx) => {
+        const here = pathPrefix.concat([idx]);
+        return (
+          <div key={it.tableId + ":" + idx}>
+            <div
+              className="flex items-start gap-2"
+              style={depth > 0 ? { paddingLeft: `${depth * 16}px` } : undefined}
+            >
+              {onRegen && (
+                <button
+                  onClick={() => onRegen(here)}
+                  title={`Перегенерировать строку из «${it.tableName}»`}
+                  className={`shrink-0 rounded-md text-muted-foreground hover:text-accent hover:bg-accent/10 transition ${
+                    depth === 0 ? "mt-1.5 p-1.5" : "mt-1 p-1"
+                  }`}
+                  aria-label="Перегенерировать"
+                >
+                  <svg width={depth === 0 ? 16 : 13} height={depth === 0 ? 16 : 13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                    <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                    <path d="M21 3v5h-5" />
+                    <path d="M3 21v-5h5" />
+                  </svg>
+                </button>
+              )}
+              <div className={`flex-1 font-mono text-sm break-words whitespace-pre-line ${depth > 0 ? "text-foreground/80" : ""}`}>
+                <span className="font-medium">{it.tableName}:</span>
+                {"\n"}
+                {it.row.join(" | ")}
+              </div>
             </div>
-          )}
-          {separator && idx < items.length - 1 && (
-            <div className="my-1 border-t border-border" style={{ marginLeft: depth > 0 ? `${depth * 16}px` : undefined }} />
-          )}
-        </div>
-      ))}
+            {it.cells && it.cells.length > 0 && (
+              <div style={{ paddingLeft: `${depth * 16}px` }}>
+                {it.cells.map((c, ci) => (
+                  <div key={ci} className="mt-0.5">
+                    <div className="font-mono text-xs text-accent/80" style={{ paddingLeft: `${16}px` }}>
+                      ↳ {c.nested.entityName}
+                    </div>
+                    <GenItemBlock
+                      items={c.nested.items}
+                      depth={depth + 1}
+                      onRegen={onRegen}
+                      pathPrefix={pathPrefix.concat([idx, ci])}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+            {separator && idx < items.length - 1 && (
+              <div className="my-1 border-t border-border" style={{ marginLeft: depth > 0 ? `${depth * 16}px` : undefined }} />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1169,13 +1261,10 @@ function RandomizeView({
     setTimeout(() => setJustSaved(false), 1500);
   };
 
-  const regenerateOne = (tableId: string) => {
-    if (!entity) return;
-    const t = entity.tables.find((x) => x.id === tableId);
-    if (!t || t.rows.length === 0) return;
-    const visited = new Set<string>([entity.id]);
-    const regenerated = generateTableItem(t, entitiesById, visited);
-    const next = items.map((it) => (it.tableId === tableId ? regenerated : it));
+  const regenerateByPath = (path: number[]) => {
+    if (!entity || path.length === 0) return;
+    const next = regenInItems(items, path, entity, entitiesById);
+    if (!next) return;
     setItems(entity.id, next, false);
   };
 
@@ -1263,31 +1352,15 @@ function RandomizeView({
           </div>
         ) : (
           <ul className="rounded-lg border border-input bg-background p-2">
-            {items.map((it, idx) => (
-              <li key={it.tableId}>
-                <div className="flex items-start gap-2 group">
-                  <button
-                    onClick={() => regenerateOne(it.tableId)}
-                    title={`Перегенерировать строку из «${it.tableName}»`}
-                    className="shrink-0 mt-1.5 p-1.5 rounded-md text-muted-foreground hover:text-accent hover:bg-accent/10 transition"
-                    aria-label="Перегенерировать"
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-                      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                      <path d="M21 3v5h-5" />
-                      <path d="M3 21v-5h5" />
-                    </svg>
-                  </button>
-                  <div className="flex-1 px-2 py-2">
-                    <GenItemBlock items={[it]} />
-                  </div>
-                </div>
-                {idx < items.length - 1 && (
-                  <div className="ml-10 my-1 border-t border-border" />
-                )}
-              </li>
-            ))}
+            <li>
+              <div className="px-2 py-2">
+                <GenItemBlock
+                  items={items}
+                  separator
+                  onRegen={regenerateByPath}
+                />
+              </div>
+            </li>
           </ul>
         )}
 
