@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 
 type Row = string[];
 
@@ -318,61 +319,118 @@ function CellLinkControl({
   onClear: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Menu position in viewport coords (fixed positioning via a portal, so the
+  // menu is never clipped by an overflow-ancestor of the cell/table).
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; minWidth: number } | null>(null);
+
+  const openMenu = () => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    // Right-align the menu to the trigger's right edge; clamp so it stays
+    // within the viewport horizontally.
+    const MENU_MIN = 200;
+    const MENU_MAX = 260;
+    const desiredRight = rect.right;
+    const left = Math.max(8, Math.min(desiredRight - MENU_MIN, window.innerWidth - MENU_MAX - 8));
+    setMenuPos({ top: rect.bottom + 4, left, minWidth: Math.min(MENU_MAX, rect.width + 40) });
+    setOpen(true);
+  };
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (
+        menuRef.current?.contains(target) ||
+        triggerRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
     };
+    // Keep the menu anchored to the trigger while the table scrolls or the
+    // viewport resizes; close it otherwise the coordinates would drift.
+    const repositionOrClose = () => {
+      const el = triggerRef.current;
+      if (!el) {
+        setOpen(false);
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      const MENU_MIN = 200;
+      const MENU_MAX = 260;
+      const desiredRight = rect.right;
+      const left = Math.max(8, Math.min(desiredRight - MENU_MIN, window.innerWidth - MENU_MAX - 8));
+      setMenuPos({ top: rect.bottom + 4, left, minWidth: Math.min(MENU_MAX, rect.width + 40) });
+    };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", repositionOrClose, true);
+    window.addEventListener("resize", repositionOrClose);
     return () => {
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", repositionOrClose, true);
+      window.removeEventListener("resize", repositionOrClose);
     };
   }, [open]);
 
-  return (
-    <div className="relative inline-flex items-center" ref={ref}>
-      {linkedName === null ? (
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          title="Добавить вложенную генерацию"
-          aria-label="Добавить вложенную генерацию"
-          className="ml-2 inline-flex items-center justify-center w-5 h-5 rounded text-muted-foreground/50 hover:text-accent hover:bg-accent/10 transition shrink-0"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
-        </button>
-      ) : (
-        <span className="ml-2 inline-flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-accent/10 text-accent hover:bg-accent/20 transition max-w-[120px] truncate"
-            title={`Вложенная генерация: ${linkedName}`}
-          >
-            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><polyline points="9 18 15 12 9 6" /></svg>
-            <span className="truncate">{linkedName}</span>
-          </button>
-          <button
-            type="button"
-            onClick={onClear}
-            title="Убрать вложенную генерацию"
-            aria-label="Убрать вложенную генерацию"
-            className="inline-flex items-center justify-center w-4 h-4 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition"
-          >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-          </button>
-        </span>
-      )}
+  const trigger = linkedName === null ? (
+    <button
+      ref={triggerRef}
+      type="button"
+      onClick={() => (open ? setOpen(false) : openMenu())}
+      title="Добавить вложенную генерацию"
+      aria-label="Добавить вложенную генерацию"
+      className="inline-flex items-center justify-center w-5 h-5 rounded text-muted-foreground/50 hover:text-accent hover:bg-accent/10 transition shrink-0"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+    </button>
+  ) : (
+    <span className="inline-flex items-center gap-1 shrink-0">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => (open ? setOpen(false) : openMenu())}
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-accent/10 text-accent hover:bg-accent/20 transition max-w-[120px] truncate"
+        title={`Вложенная генерация: ${linkedName}`}
+      >
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><polyline points="9 18 15 12 9 6" /></svg>
+        <span className="truncate">{linkedName}</span>
+      </button>
+      <button
+        type="button"
+        onClick={onClear}
+        title="Убрать вложенную генерацию"
+        aria-label="Убрать вложенную генерацию"
+        className="inline-flex items-center justify-center w-4 h-4 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition"
+      >
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+      </button>
+    </span>
+  );
 
-      {open && (
-        <div className="absolute right-0 top-full z-20 mt-1 min-w-[200px] max-w-[260px] rounded-lg border border-border bg-popover text-popover-foreground shadow-lg">
+  return (
+    <>
+      {trigger}
+      {open && menuPos && createPortal(
+        <div
+          ref={menuRef}
+          style={{
+            position: "fixed",
+            top: `${menuPos.top}px`,
+            left: `${menuPos.left}px`,
+            minWidth: `${menuPos.minWidth}px`,
+            zIndex: 9999,
+          }}
+          className="max-w-[260px] rounded-lg border border-border bg-popover text-popover-foreground shadow-lg"
+        >
           <div className="px-3 py-2 text-xs font-semibold border-b border-border">
             Выберите вложенную генерацию
           </div>
@@ -400,9 +458,10 @@ function CellLinkControl({
               ))}
             </ul>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
-    </div>
+    </>
   );
 }
 
@@ -1016,8 +1075,8 @@ function SettingsView({
                                 : null;
                               return (
                                 <td key={j} className="px-2 py-1.5 align-top">
-                                  <div className="inline-flex items-center max-w-full">
-                                    <span className="break-words whitespace-pre-line">{c}</span>
+                                  <div className="flex items-center justify-between gap-2 min-w-[80px]">
+                                    <span className="break-words whitespace-pre-line flex-1 min-w-0">{c}</span>
                                     {(!link || !linkedEntity) && (
                                       <CellLinkControl
                                         available={availableEntities}
