@@ -89,6 +89,52 @@ function parseCsv(text: string): { rows: Row[] } {
   return { rows: cleaned };
 }
 
+/**
+ * Reads an .xlsx/.xls workbook and returns one Table-per-sheet.
+ * SheetJS is loaded lazily via dynamic import so the (sizeable) parser is only
+ * fetched when the user actually uploads a spreadsheet — the initial bundle
+ * stays lean for CSV-only usage.
+ *
+ * Each cell is coerced to a string (matching how CSV rows are plain string[]);
+ * rows that are entirely blank are dropped, same rule as parseCsv.
+ */
+async function parseExcelFile(
+  file: File,
+): Promise<{ name: string; rows: Row[] }[]> {
+  const XLSX = await import("xlsx");
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array" });
+  const baseName = file.name.replace(/\.(xlsx|xls|xlsm)$/i, "");
+  const sheets: { name: string; rows: Row[] }[] = [];
+  for (const sheetName of wb.SheetNames) {
+    const ws = wb.Sheets[sheetName];
+    if (!ws) continue;
+    // header:1 → array-of-arrays; defval fills gaps so columns stay aligned;
+    // blankrows:false drops fully-empty rows at the parser level.
+    const matrix = XLSX.utils.sheet_to_json<unknown[]>(ws, {
+      header: 1,
+      defval: "",
+      blankrows: false,
+      raw: false,
+    });
+    const rows: Row[] = [];
+    for (const rawRow of matrix) {
+      if (!Array.isArray(rawRow)) continue;
+      const row = rawRow.map((c) => (c == null ? "" : String(c)));
+      if (row.some((v) => v && v.trim() !== "")) rows.push(row);
+    }
+    if (rows.length === 0) continue;
+    // A single-sheet file keeps the file name as the table name (CSV parity);
+    // a multi-sheet workbook uses sheet names so tables stay distinguishable.
+    const name =
+      wb.SheetNames.length === 1
+        ? baseName
+        : sheetName || `${baseName} (${sheets.length + 1})`;
+    sheets.push({ name, rows });
+  }
+  return sheets;
+}
+
 function pickRandomIndex(len: number): number {
   return Math.floor(Math.random() * len);
 }
@@ -787,12 +833,31 @@ function SettingsView({
     const newTables: Table[] = [];
     const usedNames = new Set<string>();
     for (const file of Array.from(files)) {
-      const text = await file.text();
-      const { rows } = parseCsv(text);
-      const base = file.name.replace(/\.csv$/i, "");
-      const finalName = uniqueTableName(entity.id, base, usedNames);
-      usedNames.add(finalName);
-      newTables.push({ id: uid(), name: finalName, rows });
+      const lower = file.name.toLowerCase();
+      if (lower.endsWith(".xlsx") || lower.endsWith(".xls") || lower.endsWith(".xlsm")) {
+        // Spreadsheet: one Table per sheet. The lazy-loaded SheetJS parser
+        // handles both .xlsx and legacy .xls.
+        let sheets: { name: string; rows: Row[] }[];
+        try {
+          sheets = await parseExcelFile(file);
+        } catch {
+          alert(`Не удалось прочитать «${file.name}». Возможно, файл повреждён.`);
+          continue;
+        }
+        for (const sheet of sheets) {
+          const finalName = uniqueTableName(entity.id, sheet.name, usedNames);
+          usedNames.add(finalName);
+          newTables.push({ id: uid(), name: finalName, rows: sheet.rows });
+        }
+      } else {
+        // Plain text CSV (comma or semicolon, see parseCsv).
+        const text = await file.text();
+        const { rows } = parseCsv(text);
+        const base = file.name.replace(/\.(csv|txt)$/i, "");
+        const finalName = uniqueTableName(entity.id, base, usedNames);
+        usedNames.add(finalName);
+        newTables.push({ id: uid(), name: finalName, rows });
+      }
     }
     updateEntity(entity.id, (e) => ({ ...e, tables: [...e.tables, ...newTables] }));
     if (fileRef.current) fileRef.current.value = "";
@@ -1019,7 +1084,7 @@ function SettingsView({
             <h2 className="text-lg font-semibold">Сущность генерации</h2>
             <p className="text-sm text-muted-foreground">
               Группа таблиц, из которых будет идти случайный выбор. Создайте
-              сущность, дайте ей название и загрузите в неё CSV таблицы.
+              сущность, дайте ей название и загрузите в неё таблицы (CSV, XLSX или XLS).
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -1065,16 +1130,16 @@ function SettingsView({
                 Таблицы в «{entity.name}»
               </h2>
               <p className="text-sm text-muted-foreground">
-                Поддерживаются файлы .csv. Все строки считаются данными.
+                Поддерживаются файлы .csv, .xlsx и .xls. Для таблиц каждый лист импортируется отдельно. Все строки считаются данными.
               </p>
             </div>
             <label className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium cursor-pointer hover:opacity-90 transition">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
-              Загрузить CSV
+              Загрузить таблицу
               <input
                 ref={fileRef}
                 type="file"
-                accept=".csv,text/csv"
+                accept=".csv,text/csv,.xlsx,.xls,.xlsm"
                 multiple
                 className="hidden"
                 onChange={(e) => handleFiles(e.target.files)}
@@ -1084,7 +1149,7 @@ function SettingsView({
 
           {entity.tables.length === 0 ? (
             <div className="border-2 border-dashed border-border rounded-lg p-10 text-center text-muted-foreground">
-              В этой сущности пока нет таблиц. Нажмите «Загрузить CSV», чтобы добавить.
+              В этой сущности пока нет таблиц. Нажмите «Загрузить таблицу», чтобы добавить.
             </div>
           ) : (
             <div className="space-y-3">
